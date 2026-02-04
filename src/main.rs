@@ -2,6 +2,7 @@ use nannou::prelude::*;
 
 struct Particle {
     position: Vec2,
+    velocity: Vec2,
 }
 
 struct Model {
@@ -26,6 +27,7 @@ fn model(app: &App) -> Model {
 
     let initial_particle = Particle {
         position: vec2(0.0, 0.0), // (0,0) is center of screen
+        velocity: vec2(5.0, 2.5),
     };
     Model {
         _window,
@@ -33,7 +35,19 @@ fn model(app: &App) -> Model {
     }
 }
 
-fn update(_app: &App, _model: &mut Model, _update: Update) {}
+fn update(app: &App, model: &mut Model, _update: Update) {
+    model.particle.position += model.particle.velocity;
+
+    let win = app.window_rect();
+
+    if model.particle.position.x > win.right() || model.particle.position.x < win.left() {
+        model.particle.velocity.x *= -1.0; // Reflect the particle
+    }
+
+    if model.particle.position.y > win.top() || model.particle.position.y < win.bottom() {
+        model.particle.velocity.y *= -1.0; // Reflect the particle
+    }
+}
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
