@@ -25,10 +25,12 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
+    app.set_loop_mode(LoopMode::rate_fps(60.0));
+
     let mut particles = Vec::new();
     let spacing = 20.0;
     let num_x = 20;
-    let num_y = 20;
+    let num_y = 10;
     // Total: 400 particles
 
     let start_x = -200.0;
@@ -41,7 +43,7 @@ fn model(app: &App) -> Model {
 
             let p = Particle {
                 position: vec2(x, y),
-                velocity: vec2(random_range(-1.0, 1.0), random_range(-1.0, 1.0)),
+                velocity: vec2(random_range(-200.0, 200.0), random_range(-200.0, 200.0)),
             };
 
             particles.push(p);
@@ -56,20 +58,41 @@ fn model(app: &App) -> Model {
     }
 }
 
-fn update(app: &App, model: &mut Model, _update: Update) {
-    for particle in model.particle.iter_mut() {
-        particle.position += particle.velocity;
-    }
+fn update(app: &App, model: &mut Model, update: Update) {
+    // Delta time between frames
+    let dt = update.since_last.as_secs_f32();
+
+    let gravity = vec2(0.0, -981.0); // 9.81 m/s^2 * 10 px/m = 98.1 px/s^2
 
     let win = app.window_rect();
 
     for particle in model.particle.iter_mut() {
-        if particle.position.x > win.right() || particle.position.x < win.left() {
-            particle.velocity.x *= -1.0; // Reflect the particle
-        }
+        // Force integration
+        particle.velocity += gravity * dt;
 
-        if particle.position.y > win.top() || particle.position.y < win.bottom() {
-            particle.velocity.y *= -1.0; // Reflect the particle
+        // Velocity integration
+        particle.position += particle.velocity * dt;
+
+        // Damping
+        let damping = -0.85; // reflection coefficient
+        let radius = 5.0;
+
+        // Collision detection
+        if particle.position.x > win.right() - radius {
+            particle.position.x = win.right() - radius;
+            particle.velocity.x *= damping;
+        }
+        if particle.position.x < win.left() + radius {
+            particle.position.x = win.left() + radius;
+            particle.velocity.x *= damping;
+        }
+        if particle.position.y > win.top() - radius {
+            particle.position.y = win.top() - radius;
+            particle.velocity.y *= damping;
+        }
+        if particle.position.y < win.bottom() + radius {
+            particle.position.y = win.bottom() + radius;
+            particle.velocity.y *= damping;
         }
     }
 }
