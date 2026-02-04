@@ -1,5 +1,21 @@
 use nannou::prelude::*;
 
+const WINDOW_WIDTH: u32 = 900;
+const WINDOW_HEIGHT: u32 = 900;
+const MIN_WINDOW_WIDTH: u32 = 1000;
+const MIN_WINDOW_HEIGHT: u32 = 900;
+
+const PARTICLE_SPACING: f32 = 20.0;
+const NUM_PARTICLES_X: i32 = 20;
+const NUM_PARTICLES_Y: i32 = 10;
+const START_X: f32 = -200.0;
+const START_Y: f32 = 200.0;
+
+const GRAVITY_Y: f32 = -981.0; // m/s^2 * 100 px/m = 981 px/s^2
+const DAMPING: f32 = -0.85; // Inelastic collision
+const PARTICLE_RADIUS: f32 = 5.0;
+const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
+
 struct Particle {
     position: Vec2,
     velocity: Vec2,
@@ -18,28 +34,21 @@ fn model(app: &App) -> Model {
     let _window = app
         .new_window()
         .title("Fluid Simulation")
-        .size(900, 900)
-        .min_size(1000, 900)
-        .max_size(1000, 900)
-        .view(view) // Connects the view function
+        .size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .min_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        .max_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        .view(view)
         .build()
         .unwrap();
 
     app.set_loop_mode(LoopMode::rate_fps(60.0));
 
     let mut particles = Vec::new();
-    let spacing = 20.0;
-    let num_x = 20;
-    let num_y = 10;
-    // Total: 400 particles
 
-    let start_x = -200.0;
-    let start_y = 200.0;
-
-    for i in 0..num_x {
-        for j in 0..num_y {
-            let x = start_x + (i as f32 * spacing);
-            let y = start_y - (j as f32 * spacing);
+    for i in 0..NUM_PARTICLES_X {
+        for j in 0..NUM_PARTICLES_Y {
+            let x = START_X + (i as f32 * PARTICLE_SPACING);
+            let y = START_Y - (j as f32 * PARTICLE_SPACING);
 
             let p = Particle {
                 position: vec2(x, y),
@@ -59,40 +68,32 @@ fn model(app: &App) -> Model {
 }
 
 fn update(app: &App, model: &mut Model, update: Update) {
-    // Delta time between frames
     let dt = update.since_last.as_secs_f32();
-
-    let gravity = vec2(0.0, -981.0); // 9.81 m/s^2 * 10 px/m = 98.1 px/s^2
-
     let win = app.window_rect();
 
     for particle in model.particle.iter_mut() {
         // Force integration
-        particle.velocity += gravity * dt;
+        particle.velocity += vec2(0.0, GRAVITY_Y) * dt;
 
         // Velocity integration
         particle.position += particle.velocity * dt;
 
-        // Damping
-        let damping = -0.85; // reflection coefficient
-        let radius = 5.0;
-
         // Collision detection
-        if particle.position.x > win.right() - radius {
-            particle.position.x = win.right() - radius;
-            particle.velocity.x *= damping;
+        if particle.position.x > win.right() - PARTICLE_RADIUS {
+            particle.position.x = win.right() - PARTICLE_RADIUS;
+            particle.velocity.x *= DAMPING;
         }
-        if particle.position.x < win.left() + radius {
-            particle.position.x = win.left() + radius;
-            particle.velocity.x *= damping;
+        if particle.position.x < win.left() + PARTICLE_RADIUS {
+            particle.position.x = win.left() + PARTICLE_RADIUS;
+            particle.velocity.x *= DAMPING;
         }
-        if particle.position.y > win.top() - radius {
-            particle.position.y = win.top() - radius;
-            particle.velocity.y *= damping;
+        if particle.position.y > win.top() - PARTICLE_RADIUS {
+            particle.position.y = win.top() - PARTICLE_RADIUS;
+            particle.velocity.y *= DAMPING;
         }
-        if particle.position.y < win.bottom() + radius {
-            particle.position.y = win.bottom() + radius;
-            particle.velocity.y *= damping;
+        if particle.position.y < win.bottom() + PARTICLE_RADIUS {
+            particle.position.y = win.bottom() + PARTICLE_RADIUS;
+            particle.velocity.y *= DAMPING;
         }
     }
 }
@@ -106,7 +107,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     for particle in model.particle.iter() {
         draw.ellipse()
             .color(DARKGREY)
-            .w_h(10.0, 10.0)
+            .w_h(PARTICLE_DIAMETER, PARTICLE_DIAMETER)
             .xy(particle.position);
     }
 
