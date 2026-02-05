@@ -12,9 +12,12 @@ const START_X: f32 = -200.0;
 const START_Y: f32 = 200.0;
 
 const GRAVITY_Y: f32 = -981.0; // m/s^2 * 100 px/m = 981 px/s^2
-const DAMPING: f32 = -0.85; // Inelastic collision
+const DAMPING: f32 = -0.65; // Inelastic collision
 const PARTICLE_RADIUS: f32 = 5.0;
 const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
+
+const INTERACTION_RADIUS: f32 = 200.0;
+const FORCE_STRENGTH: f32 = 2500.0;
 
 struct Particle {
     position: Vec2,
@@ -76,10 +79,6 @@ fn update(app: &App, model: &mut Model, update: Update) {
     let is_left_down = app.mouse.buttons.left().is_down();
     let is_right_down = app.mouse.buttons.right().is_down();
 
-    // Radius of influence
-    let interaction_radius = 200.0;
-    let force_strength = 3000.0;
-
     for particle in model.particle.iter_mut() {
         //
         let mut total_force = vec2(0.0, GRAVITY_Y);
@@ -89,11 +88,11 @@ fn update(app: &App, model: &mut Model, update: Update) {
             let distance = diff.length();
 
             // Mouse scope
-            if distance < interaction_radius {
+            if distance < INTERACTION_RADIUS {
                 let direction_normalized = diff / distance;
 
                 let direction_sign = if is_left_down { -1.0 } else { 1.0 };
-                let interaction_force = force_strength * direction_sign * direction_normalized;
+                let interaction_force = FORCE_STRENGTH * direction_sign * direction_normalized;
 
                 total_force += interaction_force;
             }
