@@ -19,6 +19,9 @@ const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
 const INTERACTION_RADIUS: f32 = 200.0;
 const FORCE_STRENGTH: f32 = 2500.0;
 
+const RESTITUTION: f32 = 0.5; // Coefficient for elastic collision particle-particle
+const DISTANCE_COLLIDE: f32 = 2.0;
+
 struct Particle {
     position: Vec2,
     velocity: Vec2,
@@ -103,7 +106,11 @@ fn update(app: &App, model: &mut Model, update: Update) {
 
         // Velocity integration
         particle.position += particle.velocity * dt;
+    }
 
+    resolve_particle_collisions(&mut model.particle);
+
+    for particle in model.particle.iter_mut() {
         // Collision detection
         if particle.position.x > win.right() - PARTICLE_RADIUS {
             particle.position.x = win.right() - PARTICLE_RADIUS;
@@ -120,6 +127,56 @@ fn update(app: &App, model: &mut Model, update: Update) {
         if particle.position.y < win.bottom() + PARTICLE_RADIUS {
             particle.position.y = win.bottom() + PARTICLE_RADIUS;
             particle.velocity.y *= DAMPING;
+        }
+    }
+}
+
+fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
+    let num_particles = particles.len();
+
+    // iter every particle with every particle (O(N^2))
+    for i in 0..num_particles {
+        // Splitting the vec for accessing both at a time
+        let (left, right) = particles.split_at_mut(i + 1);
+        let p1 = &mut left[i];
+
+        for p2 in right.iter_mut() {
+            let delta = p1.position - p2.position;
+            let dist_sq = delta.length_squared();
+
+            let min_dist = PARTICLE_DIAMETER;
+
+            if dist_sq < min_dist * min_dist {
+                // if they collide
+                let dist = dist_sq.sqrt();
+
+                if dist < DISTANCE_COLLIDE {
+                    continue;
+                }
+
+                let overlap = min_dist - dist;
+                let direction = delta / dist; // normalized vector
+
+                let correction = direction * overlap * 0.5;
+                p1.position += correction;
+                p2.position -= correction;
+
+                let relative_vel = p1.velocity - p2.velocity;
+                let vel_along_normal = relative_vel.dot(direction);
+
+                if vel_along_normal > 0.0 {
+                    continue;
+                }
+
+                let impulse_scalar = -(1.0 + RESTITUTION) * vel_along_normal;
+                // if mass its the same
+                let impulse_scalar = impulse_scalar / 2.0;
+
+                let impulse = direction * impulse_scalar;
+
+                p1.velocity += impulse;
+                p2.velocity -= impulse;
+            }
         }
     }
 }
