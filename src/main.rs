@@ -19,8 +19,10 @@ const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
 const INTERACTION_RADIUS: f32 = 200.0;
 const FORCE_STRENGTH: f32 = 2500.0;
 
+const COLLISION_PER_FRAME: i16 = 4;
 const RESTITUTION: f32 = 0.5; // Coefficient for elastic collision particle-particle
 const DISTANCE_COLLIDE: f32 = 2.0;
+const FRICTION: f32 = 0.05; // particle-particle friction
 
 struct Particle {
     position: Vec2,
@@ -108,25 +110,26 @@ fn update(app: &App, model: &mut Model, update: Update) {
         particle.position += particle.velocity * dt;
     }
 
-    resolve_particle_collisions(&mut model.particle);
-
-    for particle in model.particle.iter_mut() {
-        // Collision detection
-        if particle.position.x > win.right() - PARTICLE_RADIUS {
-            particle.position.x = win.right() - PARTICLE_RADIUS;
-            particle.velocity.x *= DAMPING;
-        }
-        if particle.position.x < win.left() + PARTICLE_RADIUS {
-            particle.position.x = win.left() + PARTICLE_RADIUS;
-            particle.velocity.x *= DAMPING;
-        }
-        if particle.position.y > win.top() - PARTICLE_RADIUS {
-            particle.position.y = win.top() - PARTICLE_RADIUS;
-            particle.velocity.y *= DAMPING;
-        }
-        if particle.position.y < win.bottom() + PARTICLE_RADIUS {
-            particle.position.y = win.bottom() + PARTICLE_RADIUS;
-            particle.velocity.y *= DAMPING;
+    for _ in 0..COLLISION_PER_FRAME {
+        resolve_particle_collisions(&mut model.particle);
+        for particle in model.particle.iter_mut() {
+            // Collision detection
+            if particle.position.x > win.right() - PARTICLE_RADIUS {
+                particle.position.x = win.right() - PARTICLE_RADIUS;
+                particle.velocity.x *= DAMPING;
+            }
+            if particle.position.x < win.left() + PARTICLE_RADIUS {
+                particle.position.x = win.left() + PARTICLE_RADIUS;
+                particle.velocity.x *= DAMPING;
+            }
+            if particle.position.y > win.top() - PARTICLE_RADIUS {
+                particle.position.y = win.top() - PARTICLE_RADIUS;
+                particle.velocity.y *= DAMPING;
+            }
+            if particle.position.y < win.bottom() + PARTICLE_RADIUS {
+                particle.position.y = win.bottom() + PARTICLE_RADIUS;
+                particle.velocity.y *= DAMPING;
+            }
         }
     }
 }
@@ -168,7 +171,13 @@ fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
                     continue;
                 }
 
-                let impulse_scalar = -(1.0 + RESTITUTION) * vel_along_normal;
+                let mut e = RESTITUTION;
+                if vel_along_normal.abs() < 40.0 {
+                    // Umbral arbitrario (ajustar según gravedad)
+                    e = 0.0;
+                }
+
+                let impulse_scalar = -(1.0 + e) * vel_along_normal;
                 // if mass its the same
                 let impulse_scalar = impulse_scalar / 2.0;
 
@@ -176,6 +185,11 @@ fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
 
                 p1.velocity += impulse;
                 p2.velocity -= impulse;
+
+                let tangent = relative_vel - (direction * vel_along_normal);
+
+                p1.velocity -= tangent * FRICTION;
+                p2.velocity += tangent * FRICTION;
             }
         }
     }
