@@ -19,7 +19,7 @@ const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
 const INTERACTION_RADIUS: f32 = 200.0;
 const FORCE_STRENGTH: f32 = 2500.0;
 
-const COLLISION_PER_FRAME: i16 = 4;
+const SUB_STEPS: usize = 8; // Increases stability but decreases performance
 const RESTITUTION: f32 = 0.5; // Coefficient for elastic collision particle-particle
 const DISTANCE_COLLIDE: f32 = 2.0;
 const FRICTION: f32 = 0.05; // particle-particle friction
@@ -76,7 +76,7 @@ fn model(app: &App) -> Model {
 }
 
 fn update(app: &App, model: &mut Model, update: Update) {
-    let dt = update.since_last.as_secs_f32();
+    let dt = update.since_last.as_secs_f32() / SUB_STEPS as f32;
     let win = app.window_rect();
 
     // Mouse interaction
@@ -84,52 +84,51 @@ fn update(app: &App, model: &mut Model, update: Update) {
     let is_left_down = app.mouse.buttons.left().is_down();
     let is_right_down = app.mouse.buttons.right().is_down();
 
-    for particle in model.particle.iter_mut() {
-        //
-        let mut total_force = vec2(0.0, GRAVITY_Y);
-
-        if is_left_down || is_right_down {
-            let diff = mouse_pos - particle.position;
-            let distance = diff.length();
-
-            // Mouse scope
-            if distance < INTERACTION_RADIUS {
-                let direction_normalized = diff / distance;
-
-                let direction_sign = if is_left_down { -1.0 } else { 1.0 };
-                let interaction_force = FORCE_STRENGTH * direction_sign * direction_normalized;
-
-                total_force += interaction_force;
-            }
-        }
-
-        // External Forces Integration
-        particle.velocity += total_force * dt;
-
-        // Velocity integration
-        particle.position += particle.velocity * dt;
-    }
-
-    for _ in 0..COLLISION_PER_FRAME {
-        resolve_particle_collisions(&mut model.particle);
+    for _ in 0..SUB_STEPS {
         for particle in model.particle.iter_mut() {
-            // Collision detection
-            if particle.position.x > win.right() - PARTICLE_RADIUS {
-                particle.position.x = win.right() - PARTICLE_RADIUS;
-                particle.velocity.x *= DAMPING;
+            let mut total_force = vec2(0.0, GRAVITY_Y);
+
+            if is_left_down || is_right_down {
+                let diff = mouse_pos - particle.position;
+                let distance = diff.length();
+
+                if distance < INTERACTION_RADIUS && distance > 0.0 {
+                    let direction_normalized = diff / distance;
+
+                    let direction_sign = if is_left_down { -1.0 } else { 1.0 };
+                    let interaction_force = FORCE_STRENGTH * direction_sign * direction_normalized;
+
+                    total_force += interaction_force;
+                }
             }
-            if particle.position.x < win.left() + PARTICLE_RADIUS {
-                particle.position.x = win.left() + PARTICLE_RADIUS;
-                particle.velocity.x *= DAMPING;
-            }
-            if particle.position.y > win.top() - PARTICLE_RADIUS {
-                particle.position.y = win.top() - PARTICLE_RADIUS;
-                particle.velocity.y *= DAMPING;
-            }
-            if particle.position.y < win.bottom() + PARTICLE_RADIUS {
-                particle.position.y = win.bottom() + PARTICLE_RADIUS;
-                particle.velocity.y *= DAMPING;
-            }
+            // External Forces Integration
+            particle.velocity += total_force * dt;
+
+            // Velocity integration
+            particle.position += particle.velocity * dt;
+        }
+        resolve_boundaries(model, win);
+        resolve_particle_collisions(&mut model.particle);
+    }
+}
+
+fn resolve_boundaries(model: &mut Model, win: Rect) {
+    for particle in model.particle.iter_mut() {
+        if particle.position.x > win.right() - PARTICLE_RADIUS {
+            particle.position.x = win.right() - PARTICLE_RADIUS;
+            particle.velocity.x *= DAMPING;
+        }
+        if particle.position.x < win.left() + PARTICLE_RADIUS {
+            particle.position.x = win.left() + PARTICLE_RADIUS;
+            particle.velocity.x *= DAMPING;
+        }
+        if particle.position.y > win.top() - PARTICLE_RADIUS {
+            particle.position.y = win.top() - PARTICLE_RADIUS;
+            particle.velocity.y *= DAMPING;
+        }
+        if particle.position.y < win.bottom() + PARTICLE_RADIUS {
+            particle.position.y = win.bottom() + PARTICLE_RADIUS;
+            particle.velocity.y *= DAMPING;
         }
     }
 }
@@ -146,16 +145,15 @@ fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
         for p2 in right.iter_mut() {
             let delta = p1.position - p2.position;
             let dist_sq = delta.length_squared();
-
             let min_dist = PARTICLE_DIAMETER;
 
-            if dist_sq < min_dist * min_dist {
+            if dist_sq < min_dist * min_dist && dist_sq > 0.0001 {
                 // if they collide
                 let dist = dist_sq.sqrt();
 
-                if dist < DISTANCE_COLLIDE {
+                /* if dist < DISTANCE_COLLIDE {
                     continue;
-                }
+                } */
 
                 let overlap = min_dist - dist;
                 let direction = delta / dist; // normalized vector
@@ -164,7 +162,7 @@ fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
                 p1.position += correction;
                 p2.position -= correction;
 
-                let relative_vel = p1.velocity - p2.velocity;
+                /* let relative_vel = p1.velocity - p2.velocity;
                 let vel_along_normal = relative_vel.dot(direction);
 
                 if vel_along_normal > 0.0 {
@@ -189,7 +187,7 @@ fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
                 let tangent = relative_vel - (direction * vel_along_normal);
 
                 p1.velocity -= tangent * FRICTION;
-                p2.velocity += tangent * FRICTION;
+                p2.velocity += tangent * FRICTION; */
             }
         }
     }
