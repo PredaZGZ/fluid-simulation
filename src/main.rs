@@ -16,13 +16,11 @@ const DAMPING: f32 = -0.65; // Inelastic collision
 const PARTICLE_RADIUS: f32 = 5.0;
 const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
 
-const INTERACTION_RADIUS: f32 = 200.0;
-const FORCE_STRENGTH: f32 = 2500.0;
+const INTERACTION_RADIUS: f32 = 500.0;
+const FORCE_STRENGTH: f32 = 3000.0;
 
 const SUB_STEPS: usize = 8; // Increases stability but decreases performance
 const RESTITUTION: f32 = 0.5; // Coefficient for elastic collision particle-particle
-const DISTANCE_COLLIDE: f32 = 2.0;
-const FRICTION: f32 = 0.05; // particle-particle friction
 
 struct Particle {
     position: Vec2,
@@ -32,6 +30,56 @@ struct Particle {
 struct Model {
     _window: window::Id,
     particle: Vec<Particle>,
+    grid: Grid,
+}
+
+struct Grid {
+    cells: Vec<Vec<usize>>, // index of particles
+    cols: usize,
+    rows: usize,
+    cell_size: f32,
+}
+
+impl Grid {
+    fn new(width: f32, height: f32, cell_size: f32) -> Self {
+        let cols = (width / cell_size).ceil() as usize + 1;
+        let rows = (height / cell_size).ceil() as usize + 1;
+
+        let cells = vec![Vec::with_capacity(10); cols * rows];
+
+        Grid {
+            cells,
+            cols,
+            rows,
+            cell_size,
+        }
+    }
+
+    fn clear(&mut self) {
+        for cell in self.cells.iter_mut() {
+            cell.clear();
+        }
+    }
+
+    fn add_particle(&mut self, particle_index: usize, position: Vec2, win_rect: Rect) {
+        // Convert position from world coordinates to grid coordinates
+        let x = position.x - win_rect.left();
+        let y = position.y - win_rect.bottom();
+
+        if x < 0.0 || y < 0.0 {
+            return;
+        }
+
+        let col = (x / self.cell_size).floor() as usize;
+        let row = (y / self.cell_size).floor() as usize;
+
+        // Ensure it's within bounds to avoid crash
+        let col = col.min(self.cols - 1);
+        let row = row.min(self.rows - 1);
+
+        let index = row * self.cols + col;
+        self.cells[index].push(particle_index);
+    }
 }
 
 fn main() {
@@ -69,9 +117,12 @@ fn model(app: &App) -> Model {
 
     println!("{} particles", particles.len());
 
+    let grid = Grid::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32, PARTICLE_DIAMETER);
+
     Model {
         _window,
         particle: particles,
+        grid,
     }
 }
 
@@ -86,29 +137,35 @@ fn update(app: &App, model: &mut Model, update: Update) {
 
     for _ in 0..SUB_STEPS {
         for particle in model.particle.iter_mut() {
-            let mut total_force = vec2(0.0, GRAVITY_Y);
-
             if is_left_down || is_right_down {
                 let diff = mouse_pos - particle.position;
-                let distance = diff.length();
+                let dist = diff.length();
 
-                if distance < INTERACTION_RADIUS && distance > 0.0 {
-                    let direction_normalized = diff / distance;
+                if dist < INTERACTION_RADIUS && dist > 0.0 {
+                    let dir = diff / dist;
+                    // Mouse with cuadratic force
+                    let strength = (1.0 - dist / INTERACTION_RADIUS).powi(2) * FORCE_STRENGTH;
 
-                    let direction_sign = if is_left_down { -1.0 } else { 1.0 };
-                    let interaction_force = FORCE_STRENGTH * direction_sign * direction_normalized;
-
-                    total_force += interaction_force;
+                    if is_left_down {
+                        particle.velocity -= dir * strength * dt; // Attract
+                    } else {
+                        particle.velocity += dir * strength * dt; // Repel
+                    }
                 }
             }
-            // External Forces Integration
-            particle.velocity += total_force * dt;
-
-            // Velocity integration
+            particle.velocity += vec2(0.0, GRAVITY_Y) * dt;
             particle.position += particle.velocity * dt;
         }
+
+        model.grid.clear();
+
+        for (i, p) in model.particle.iter().enumerate() {
+            model.grid.add_particle(i, p.position, win);
+        }
+
+        resolve_collisions_with_grid(&mut model.particle, &model.grid);
+
         resolve_boundaries(model, win);
-        resolve_particle_collisions(&mut model.particle);
     }
 }
 
@@ -133,61 +190,75 @@ fn resolve_boundaries(model: &mut Model, win: Rect) {
     }
 }
 
-fn resolve_particle_collisions(particles: &mut Vec<Particle>) {
-    let num_particles = particles.len();
+fn resolve_collisions_with_grid(particles: &mut Vec<Particle>, grid: &Grid) {
+    for y in 0..grid.rows {
+        for x in 0..grid.cols {
+            let cell_idx = y * grid.cols + x;
+            let cell_particles = &grid.cells[cell_idx];
 
-    // iter every particle with every particle (O(N^2))
-    for i in 0..num_particles {
-        // Splitting the vec for accessing both at a time
-        let (left, right) = particles.split_at_mut(i + 1);
-        let p1 = &mut left[i];
+            solve_cell(cell_particles, cell_particles, particles);
 
-        for p2 in right.iter_mut() {
-            let delta = p1.position - p2.position;
+            if x + 1 < grid.cols {
+                solve_cell(
+                    cell_particles,
+                    &grid.cells[y * grid.cols + (x + 1)],
+                    particles,
+                );
+            }
+            if y + 1 < grid.rows {
+                solve_cell(
+                    cell_particles,
+                    &grid.cells[(y + 1) * grid.cols + x],
+                    particles,
+                );
+
+                if x + 1 < grid.cols {
+                    solve_cell(
+                        cell_particles,
+                        &grid.cells[(y + 1) * grid.cols + (x + 1)],
+                        particles,
+                    );
+                }
+                if x > 0 {
+                    solve_cell(
+                        cell_particles,
+                        &grid.cells[(y + 1) * grid.cols + (x - 1)],
+                        particles,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn solve_cell(idx_list_a: &[usize], idx_list_b: &[usize], particles: &mut Vec<Particle>) {
+    for &i in idx_list_a {
+        for &j in idx_list_b {
+            if i == j {
+                continue;
+            }
+
+            let p1_pos = particles[i].position;
+            let p2_pos = particles[j].position;
+
+            let delta = p1_pos - p2_pos;
             let dist_sq = delta.length_squared();
             let min_dist = PARTICLE_DIAMETER;
 
             if dist_sq < min_dist * min_dist && dist_sq > 0.0001 {
-                // if they collide
                 let dist = dist_sq.sqrt();
-
-                /* if dist < DISTANCE_COLLIDE {
-                    continue;
-                } */
-
                 let overlap = min_dist - dist;
-                let direction = delta / dist; // normalized vector
+                let direction = delta / dist;
 
                 let correction = direction * overlap * 0.5;
-                p1.position += correction;
-                p2.position -= correction;
 
-                /* let relative_vel = p1.velocity - p2.velocity;
-                let vel_along_normal = relative_vel.dot(direction);
+                particles[i].position += correction;
+                particles[j].position -= correction;
+                let rel_vel = particles[i].velocity - particles[j].velocity;
+                let impact = rel_vel.dot(direction) * RESTITUTION;
 
-                if vel_along_normal > 0.0 {
-                    continue;
-                }
-
-                let mut e = RESTITUTION;
-                if vel_along_normal.abs() < 40.0 {
-                    // Umbral arbitrario (ajustar según gravedad)
-                    e = 0.0;
-                }
-
-                let impulse_scalar = -(1.0 + e) * vel_along_normal;
-                // if mass its the same
-                let impulse_scalar = impulse_scalar / 2.0;
-
-                let impulse = direction * impulse_scalar;
-
-                p1.velocity += impulse;
-                p2.velocity -= impulse;
-
-                let tangent = relative_vel - (direction * vel_along_normal);
-
-                p1.velocity -= tangent * FRICTION;
-                p2.velocity += tangent * FRICTION; */
+                particles[i].velocity -= direction * impact;
+                particles[j].velocity += direction * impact;
             }
         }
     }
