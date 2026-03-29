@@ -1,85 +1,24 @@
+mod sph;
+
 use nannou::prelude::*;
+use sph::{Interaction, InteractionMode, SphConfig, SphSimulation};
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 900;
-const MIN_WINDOW_WIDTH: u32 = 1000;
-const MIN_WINDOW_HEIGHT: u32 = 900;
-
-const PARTICLE_SPACING: f32 = 15.0;
-const NUM_PARTICLES_X: i32 = 40;
-const NUM_PARTICLES_Y: i32 = 40;
-const START_X: f32 = -200.0;
-const START_Y: f32 = 200.0;
-
-const GRAVITY_Y: f32 = -981.0; // m/s^2 * 100 px/m = 981 px/s^2
-const DAMPING: f32 = -0.65; // Inelastic collision
-const PARTICLE_RADIUS: f32 = 5.0;
-const PARTICLE_DIAMETER: f32 = PARTICLE_RADIUS * 2.0;
-
-const INTERACTION_RADIUS: f32 = 500.0;
-const FORCE_STRENGTH: f32 = 3000.0;
-
-const SUB_STEPS: usize = 8; // Increases stability but decreases performance
-const RESTITUTION: f32 = 0.5; // Coefficient for elastic collision particle-particle
-
-struct Particle {
-    position: Vec2,
-    velocity: Vec2,
-}
+const FIXED_TIME_STEP: f32 = 1.0 / 240.0;
+const MAX_STEPS_PER_FRAME: usize = 6;
+const PIXELS_PER_METER: f32 = 110.0;
+const MAX_FRAME_DELTA: f32 = 1.0 / 30.0;
+const INITIAL_PARTICLES_X: usize = 36;
+const INITIAL_PARTICLES_Y: usize = 48;
+const PARTICLE_DRAW_RESOLUTION: f32 = 6.0;
+const INTERACTION_DRAW_RESOLUTION: f32 = 24.0;
 
 struct Model {
     _window: window::Id,
-    particle: Vec<Particle>,
-    grid: Grid,
-}
-
-struct Grid {
-    cells: Vec<Vec<usize>>, // index of particles
-    cols: usize,
-    rows: usize,
-    cell_size: f32,
-}
-
-impl Grid {
-    fn new(width: f32, height: f32, cell_size: f32) -> Self {
-        let cols = (width / cell_size).ceil() as usize + 1;
-        let rows = (height / cell_size).ceil() as usize + 1;
-
-        let cells = vec![Vec::with_capacity(10); cols * rows];
-
-        Grid {
-            cells,
-            cols,
-            rows,
-            cell_size,
-        }
-    }
-
-    fn clear(&mut self) {
-        for cell in self.cells.iter_mut() {
-            cell.clear();
-        }
-    }
-
-    fn add_particle(&mut self, particle_index: usize, position: Vec2, win_rect: Rect) {
-        // Convert position from world coordinates to grid coordinates
-        let x = position.x - win_rect.left();
-        let y = position.y - win_rect.bottom();
-
-        if x < 0.0 || y < 0.0 {
-            return;
-        }
-
-        let col = (x / self.cell_size).floor() as usize;
-        let row = (y / self.cell_size).floor() as usize;
-
-        // Ensure it's within bounds to avoid crash
-        let col = col.min(self.cols - 1);
-        let row = row.min(self.rows - 1);
-
-        let index = row * self.cols + col;
-        self.cells[index].push(particle_index);
-    }
+    simulation: SphSimulation,
+    accumulator: f32,
+    steps_last_frame: usize,
 }
 
 fn main() {
@@ -89,202 +28,161 @@ fn main() {
 fn model(app: &App) -> Model {
     let _window = app
         .new_window()
-        .title("Fluid Simulation")
+        .title("WCSPH Fluid Simulation")
         .size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .min_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-        .max_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        .min_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .max_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .view(view)
         .build()
         .unwrap();
 
     app.set_loop_mode(LoopMode::rate_fps(60.0));
 
-    let mut particles = Vec::new();
+    let bounds = simulation_bounds();
+    let mut simulation = SphSimulation::new(SphConfig::new(bounds));
+    let config = *simulation.config();
+    let origin = vec2(
+        config.bounds.left() + config.bounds.w() * 0.14,
+        config.bounds.bottom() + config.bounds.h() * 0.12,
+    );
 
-    for i in 0..NUM_PARTICLES_X {
-        for j in 0..NUM_PARTICLES_Y {
-            let x = START_X + (i as f32 * PARTICLE_SPACING);
-            let y = START_Y - (j as f32 * PARTICLE_SPACING);
-
-            let p = Particle {
-                position: vec2(x, y),
-                velocity: vec2(random_range(-200.0, 200.0), random_range(-200.0, 200.0)),
-            };
-
-            particles.push(p);
-        }
-    }
-
-    println!("{} particles", particles.len());
-
-    let grid = Grid::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32, PARTICLE_DIAMETER);
+    simulation.seed_block(INITIAL_PARTICLES_X, INITIAL_PARTICLES_Y, origin);
 
     Model {
         _window,
-        particle: particles,
-        grid,
+        simulation,
+        accumulator: 0.0,
+        steps_last_frame: 0,
     }
 }
 
 fn update(app: &App, model: &mut Model, update: Update) {
-    let dt = update.since_last.as_secs_f32() / SUB_STEPS as f32;
-    let win = app.window_rect();
+    model.accumulator += update.since_last.as_secs_f32().min(MAX_FRAME_DELTA);
 
-    // Mouse interaction
-    let mouse_pos = app.mouse.position();
-    let is_left_down = app.mouse.buttons.left().is_down();
-    let is_right_down = app.mouse.buttons.right().is_down();
+    let interaction = active_interaction(app, *model.simulation.config());
+    let mut steps = 0;
 
-    for _ in 0..SUB_STEPS {
-        for particle in model.particle.iter_mut() {
-            if is_left_down || is_right_down {
-                let diff = mouse_pos - particle.position;
-                let dist = diff.length();
-
-                if dist < INTERACTION_RADIUS && dist > 0.0 {
-                    let dir = diff / dist;
-                    // Mouse with cuadratic force
-                    let strength = (1.0 - dist / INTERACTION_RADIUS).powi(2) * FORCE_STRENGTH;
-
-                    if is_left_down {
-                        particle.velocity -= dir * strength * dt; // Attract
-                    } else {
-                        particle.velocity += dir * strength * dt; // Repel
-                    }
-                }
-            }
-            particle.velocity += vec2(0.0, GRAVITY_Y) * dt;
-            particle.position += particle.velocity * dt;
-        }
-
-        model.grid.clear();
-
-        for (i, p) in model.particle.iter().enumerate() {
-            model.grid.add_particle(i, p.position, win);
-        }
-
-        resolve_collisions_with_grid(&mut model.particle, &model.grid);
-
-        resolve_boundaries(model, win);
+    while model.accumulator >= FIXED_TIME_STEP && steps < MAX_STEPS_PER_FRAME {
+        model.simulation.step(FIXED_TIME_STEP, interaction);
+        model.accumulator -= FIXED_TIME_STEP;
+        steps += 1;
     }
-}
 
-fn resolve_boundaries(model: &mut Model, win: Rect) {
-    for particle in model.particle.iter_mut() {
-        if particle.position.x > win.right() - PARTICLE_RADIUS {
-            particle.position.x = win.right() - PARTICLE_RADIUS;
-            particle.velocity.x *= DAMPING;
-        }
-        if particle.position.x < win.left() + PARTICLE_RADIUS {
-            particle.position.x = win.left() + PARTICLE_RADIUS;
-            particle.velocity.x *= DAMPING;
-        }
-        if particle.position.y > win.top() - PARTICLE_RADIUS {
-            particle.position.y = win.top() - PARTICLE_RADIUS;
-            particle.velocity.y *= DAMPING;
-        }
-        if particle.position.y < win.bottom() + PARTICLE_RADIUS {
-            particle.position.y = win.bottom() + PARTICLE_RADIUS;
-            particle.velocity.y *= DAMPING;
-        }
+    if steps == MAX_STEPS_PER_FRAME {
+        model.accumulator = 0.0;
     }
-}
 
-fn resolve_collisions_with_grid(particles: &mut Vec<Particle>, grid: &Grid) {
-    for y in 0..grid.rows {
-        for x in 0..grid.cols {
-            let cell_idx = y * grid.cols + x;
-            let cell_particles = &grid.cells[cell_idx];
-
-            solve_cell(cell_particles, cell_particles, particles);
-
-            if x + 1 < grid.cols {
-                solve_cell(
-                    cell_particles,
-                    &grid.cells[y * grid.cols + (x + 1)],
-                    particles,
-                );
-            }
-            if y + 1 < grid.rows {
-                solve_cell(
-                    cell_particles,
-                    &grid.cells[(y + 1) * grid.cols + x],
-                    particles,
-                );
-
-                if x + 1 < grid.cols {
-                    solve_cell(
-                        cell_particles,
-                        &grid.cells[(y + 1) * grid.cols + (x + 1)],
-                        particles,
-                    );
-                }
-                if x > 0 {
-                    solve_cell(
-                        cell_particles,
-                        &grid.cells[(y + 1) * grid.cols + (x - 1)],
-                        particles,
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn solve_cell(idx_list_a: &[usize], idx_list_b: &[usize], particles: &mut Vec<Particle>) {
-    for &i in idx_list_a {
-        for &j in idx_list_b {
-            if i == j {
-                continue;
-            }
-
-            let p1_pos = particles[i].position;
-            let p2_pos = particles[j].position;
-
-            let delta = p1_pos - p2_pos;
-            let dist_sq = delta.length_squared();
-            let min_dist = PARTICLE_DIAMETER;
-
-            if dist_sq < min_dist * min_dist && dist_sq > 0.0001 {
-                let dist = dist_sq.sqrt();
-                let overlap = min_dist - dist;
-                let direction = delta / dist;
-
-                let correction = direction * overlap * 0.5;
-
-                particles[i].position += correction;
-                particles[j].position -= correction;
-                let rel_vel = particles[i].velocity - particles[j].velocity;
-                let impact = rel_vel.dot(direction) * RESTITUTION;
-
-                particles[i].velocity -= direction * impact;
-                particles[j].velocity += direction * impact;
-            }
-        }
+    model.steps_last_frame = steps;
+    if steps > 0 {
+        model.simulation.refresh_stats();
     }
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
     let win = app.window_rect();
+    let config = *model.simulation.config();
 
-    draw.background().color(BLACK);
+    draw.background().color(srgba(0.03, 0.04, 0.07, 1.0));
 
-    for particle in model.particle.iter() {
-        let speed = particle.velocity.length();
+    draw.rect()
+        .xy(world_to_screen(config.bounds.xy()))
+        .w_h(
+            config.bounds.w() * PIXELS_PER_METER,
+            config.bounds.h() * PIXELS_PER_METER,
+        )
+        .no_fill()
+        .stroke(srgba(0.65, 0.78, 0.95, 0.65))
+        .stroke_weight(2.0);
 
-        // 0.4 -> Blue (Low Speed), 0.0 -> Red (High Speed)
-        let color = map_range(speed, 0.0, 800.0, 0.4, 0.0);
+    for ((position, velocity), density) in model
+        .simulation
+        .positions()
+        .iter()
+        .zip(model.simulation.velocities())
+        .zip(model.simulation.densities())
+    {
+        let speed = velocity.length();
+        let density_ratio = (*density / config.rest_density).clamp(0.85, 1.35);
+        let hue = map_range(speed, 0.0, 8.0, 0.56, 0.03).clamp(0.03, 0.56);
+        let lightness = map_range(density_ratio, 0.85, 1.35, 0.44, 0.68).clamp(0.40, 0.72);
+
         draw.ellipse()
-            .hsla(color, 0.8, 0.5, 1.0)
-            .w_h(PARTICLE_DIAMETER, PARTICLE_DIAMETER)
-            .xy(particle.position);
+            .xy(world_to_screen(*position))
+            .radius(config.particle_radius * PIXELS_PER_METER)
+            .resolution(PARTICLE_DRAW_RESOLUTION)
+            .hsla(hue, 0.78, lightness, 0.95);
     }
 
-    let fps_text = format!("FPS: {:.0}", app.fps());
-    draw.text(&fps_text)
-        .font_size(16)
+    if let Some(interaction) = active_interaction(app, config) {
+        let ring_color = match interaction.mode {
+            InteractionMode::Attract => srgba(0.35, 0.82, 0.95, 0.35),
+            InteractionMode::Repel => srgba(0.95, 0.45, 0.35, 0.35),
+        };
+
+        draw.ellipse()
+            .xy(world_to_screen(interaction.position))
+            .radius(interaction.radius * PIXELS_PER_METER)
+            .resolution(INTERACTION_DRAW_RESOLUTION)
+            .no_fill()
+            .stroke(ring_color)
+            .stroke_weight(2.0);
+    }
+
+    let stats = model.simulation.stats();
+    let hud = format!(
+        "WCSPH + rayon\nparticles: {}  threads: {}  fps: {:.0}\nmax speed: {:.2} m/s  density: {:.2} rho0  steps/frame: {}\nmouse: left attracts, right repels",
+        stats.particle_count,
+        stats.threads,
+        app.fps(),
+        stats.max_speed,
+        stats.max_density_ratio,
+        model.steps_last_frame,
+    );
+
+    draw.text(&hud)
+        .left_justify()
         .color(WHITE)
-        .x_y(win.left() + 40.0, win.top() - 20.0);
+        .font_size(16)
+        .w_h(470.0, 110.0)
+        .x_y(win.left() + 240.0, win.top() - 48.0);
+
     draw.to_frame(app, &frame).unwrap();
+}
+
+fn simulation_bounds() -> Rect {
+    Rect::from_w_h(
+        WINDOW_WIDTH as f32 / PIXELS_PER_METER,
+        WINDOW_HEIGHT as f32 / PIXELS_PER_METER,
+    )
+}
+
+fn active_interaction(app: &App, config: SphConfig) -> Option<Interaction> {
+    let mouse_position = screen_to_world(app.mouse.position());
+
+    if app.mouse.buttons.left().is_down() {
+        Some(Interaction {
+            position: mouse_position,
+            radius: config.interaction_radius,
+            strength: config.interaction_strength,
+            mode: InteractionMode::Attract,
+        })
+    } else if app.mouse.buttons.right().is_down() {
+        Some(Interaction {
+            position: mouse_position,
+            radius: config.interaction_radius,
+            strength: config.interaction_strength,
+            mode: InteractionMode::Repel,
+        })
+    } else {
+        None
+    }
+}
+
+fn screen_to_world(position: Vec2) -> Vec2 {
+    position / PIXELS_PER_METER
+}
+
+fn world_to_screen(position: Vec2) -> Vec2 {
+    position * PIXELS_PER_METER
 }
