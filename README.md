@@ -33,6 +33,11 @@ cargo test
 cargo check --release
 ```
 
+## Documentacion tecnica
+
+- `docs/ARTICULO_SPH.md`: articulo tecnico sobre SPH, fisica, arquitectura y
+  relacion entre teoria y codigo
+
 ## Nota
 
 Es un solver 2D interactivo fisicamente fundamentado, no una implementacion CFD
